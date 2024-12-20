@@ -54,7 +54,6 @@ eci_options_available = ['eci_trade', 'eci_tech', 'eci_research']
 # -----------------------------------------------
 # Layout
 # -----------------------------------------------
-app = dash.Dash(__name__)
 
 app.layout = html.Div([
     html.Div([
