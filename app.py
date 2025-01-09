@@ -10,6 +10,9 @@ import warnings
 import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output, State
+import itertools
+
+scaler = MinMaxScaler()
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -58,17 +61,16 @@ eci_options_available = ['eci_trade', 'eci_tech', 'eci_research']
 app.layout = html.Div([
     html.Div([
         html.H1("Inputs:"),
-        html.Label("Select ECI type:"),
-        dcc.RadioItems(
-            id='eci-radio',
+        html.Label("Select ECI type(s):"),
+        dcc.Checklist(
+            id='eci-checklist',
             options=[
                {'label': 'ECI (trade)', 'value': 'eci_trade'},
                {'label': 'ECI (tech)', 'value': 'eci_tech'},
                {'label': 'ECI (research)', 'value': 'eci_research'}
             ],
-            value='eci_trade',
-            className='my-radio-group',
-            labelStyle={'display': 'inline-block', 'margin-right': '12px'}
+            value=['eci_trade'],  # Default selected
+            labelStyle={'display': 'block', 'margin-bottom': '5px'}
         ),
         html.Br(),
         html.Label("Select covariates:"),
@@ -166,11 +168,11 @@ app.layout = html.Div([
 @app.callback(
     Output('output-container', 'children'),
     Input('run-button', 'n_clicks'),
-    State('eci-radio', 'value'),
+    State('eci-checklist', 'value'),  # Updated ID
     State('dataframes-dropdown', 'value'),
     State('initial-year-input', 'value'),
     State('time-period-input', 'value'),
-    State('fixed-effects-toggle', 'value')  # New state for fixed effects
+    State('fixed-effects-toggle', 'value')  # Fixed effects
 )
 def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_year, T, fixed_effects):
     if n_clicks == 0:
@@ -180,6 +182,12 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
     # Data Preparation
     # -----------------------------------------------
     years = list(range(initial_year, 2019, T))
+
+    # Define the maximum allowed year
+    max_year = 2023 - T
+
+    # Create a new list with years <= max_year
+    years = [year for year in years if year <= max_year]
 
     # Download GDP data
     gdp_url = "https://api.worldbank.org/v2/en/indicator/NY.GDP.PCAP.PP.KD?downloadformat=excel"
@@ -200,12 +208,12 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
 
 
     # Load ECI data
-    eci_trade_raw = pd.read_csv('data/Data-ECI-Trade.csv')
-    #eci_trade_raw = pd.read_csv('data/eci_trade.csv')
-    eci_tech_raw = pd.read_csv('data/Data-ECI-Technology.csv')
-    #eci_tech_raw = pd.read_csv('data/eci_patents.csv')
-    eci_research_raw = pd.read_csv('data/Data-ECI-Research.csv')
-    #eci_research_raw = pd.read_csv('data/eci_publications.csv')
+    #eci_trade_raw = pd.read_csv('data/Data-ECI-Trade.csv')
+    eci_trade_raw = pd.read_csv('data/eci_trade.csv')
+    #eci_tech_raw = pd.read_csv('data/Data-ECI-Technology.csv')
+    eci_tech_raw = pd.read_csv('data/eci_patents.csv')
+    #eci_research_raw = pd.read_csv('data/Data-ECI-Research.csv')
+    eci_research_raw = pd.read_csv('data/eci_publications.csv')
 
         # Define load_dataframes function
     def load_dataframes(selected_names):
@@ -225,6 +233,28 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
                         loaded_dataframes[name] = loaded_data[columns_to_keep]
                     else:
                         print(f"Failed to fetch data for {name}: {response.status_code}")
+                elif name in ["eci_trade", "eci_tech", "eci_research"]:
+                    try:
+                        # Attempt to read as an Excel file
+                        datax = pd.read_excel(dataframes[name])
+                    except Exception as e:
+                        print(f"Failed to read {name} as Excel. Trying CSV. Error: {e}")
+                        try:
+                            # If Excel read fails, attempt to read as a CSV
+                            datax = pd.read_csv(dataframes[name])
+                        except Exception as e_csv:
+                            print(f"Failed to read {name} as CSV as well. Error: {e_csv}")
+                    for column in datax.columns:
+                        if datax[column].dtype in ['float64', 'int64']:  # Only scale numeric columns      
+                            # Transform only the non-NaN values
+                            scaler.fit(datax[column].values.reshape(-1, 1))
+                            scaled_values = scaler.transform(datax[column].values.reshape(-1, 1))
+
+                            # Create a new column with scaled values, retaining NaNs
+                            datax[column] = scaled_values
+                    
+                    loaded_dataframes[name] = datax.copy()
+                    
                 else:
                     # Load from local file
                     try:
@@ -245,8 +275,34 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
 
 
     eci_trade = eci_trade_raw.copy()
+    for column in eci_trade_raw.columns:
+        if eci_trade_raw[column].dtype in ['float64', 'int64']:  # Only scale numeric columns      
+            # Transform only the non-NaN values
+            scaler.fit(eci_trade_raw[column].values.reshape(-1, 1))
+            scaled_values = scaler.transform(eci_trade_raw[column].values.reshape(-1, 1))
+            
+            # Create a new column with scaled values, retaining NaNs
+            eci_trade[column] = scaled_values
+            
     eci_tech = eci_tech_raw.copy()
+    for column in eci_tech_raw.columns:
+        if eci_tech_raw[column].dtype in ['float64', 'int64']:  # Only scale numeric columns      
+            # Transform only the non-NaN values
+            scaler.fit(eci_tech_raw[column].values.reshape(-1, 1))
+            scaled_values = scaler.transform(eci_tech_raw[column].values.reshape(-1, 1))
+            
+            # Create a new column with scaled values, retaining NaNs
+            eci_tech[column] = scaled_values
+            
     eci_research = eci_research_raw.copy()
+    for column in eci_research_raw.columns:
+        if eci_research_raw[column].dtype in ['float64', 'int64']:  # Only scale numeric columns      
+            # Transform only the non-NaN values
+            scaler.fit(eci_research_raw[column].values.reshape(-1, 1))
+            scaled_values = scaler.transform(eci_research_raw[column].values.reshape(-1, 1))
+            
+            # Create a new column with scaled values, retaining NaNs
+            eci_research[column] = scaled_values
 
     def reshape_df(df, years, value_name):
         df.columns = df.columns.astype(str)
@@ -276,11 +332,23 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
         'eci_research': eci_research_reshaped
     }
 
-    if selected_eci not in eci_options_dict:
-        return html.Div("Invalid ECI selection.", style={'color': 'red'})
 
-    selected_eci_df = eci_options_dict[selected_eci]
+    # Start with a base DataFrame that has GDP, growth, population, etc.
+    regression_df = gdp_pc_reshaped.merge(growth_reshaped, on=['Country', 'Year'], how='left') \
+                                   .merge(pop_reshaped,    on=['Country', 'Year'], how='left')
 
+
+    # Now loop over only the ECI variables you want
+    for eci_var in selected_eci:
+        # e.g., eci_var = 'eci_trade'
+        if eci_var in eci_options_dict:
+            regression_df = regression_df.merge(eci_options_dict[eci_var],
+                                                on=['Country', 'Year'],
+                                                how='left')
+        else:
+            print(f"Warning: {eci_var} not in eci_options_dict!")
+            
+            
     def reshape_loaded_dataframes(loaded_dataframes, years):
         reshaped_dataframes = {}
         for name, df in loaded_dataframes.items():
@@ -290,10 +358,7 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
 
     reshaped_dfs = reshape_loaded_dataframes(loaded_dfs, years)
 
-    # Merge
-    regression_df = selected_eci_df.merge(gdp_pc_reshaped, on=['Country', 'Year'], how='left') \
-                                   .merge(growth_reshaped, on=['Country', 'Year'], how='left') \
-                                   .merge(pop_reshaped, on=['Country', 'Year'], how='left')
+
 
     for name, df in reshaped_dfs.items():
         regression_df = regression_df.merge(df, on=['Country', 'Year'], how='left')
@@ -308,29 +373,57 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
         if column_name in regression_df.columns:
             regression_df[column_name] = np.log(regression_df[column_name] / regression_df['pop'])  
 
+
+
     regression_df['pop'] = np.log(regression_df['pop'])
 
-    target_columns = ["nat_rents", "gcf", "money"]
+    target_columns = ["nat_rents", "gcf", "money", "hc"]
 
     # Apply log transformation only if the column exists
     for column_name in target_columns:
         if column_name in regression_df.columns:
             regression_df[column_name] = np.log(regression_df[column_name])
 
+    regression_df = regression_df.dropna(subset=selected_eci)
+
+    # Number of rows before dropping
+    original_len = len(regression_df['Country'].unique())
+
+    # Drop missing
     regression_df = regression_df.dropna()
+
+    # Number of rows after dropping
+    after_len = len(regression_df['Country'].unique())
+
+    # Fraction (or percentage) of lost data
+    fraction_lost = (original_len - after_len) / original_len
 
     # -----------------------------------------------
     # Dynamically Create Regression Formulas
     # -----------------------------------------------
-    covariate_order = [selected_eci] + selected_dataframes_list + ['gdp_pc']
-    
+    #covariate_order = [selected_eci] + selected_dataframes_list + ['gdp_pc']
+
+    # Initialize the list with individual ECI variables
+    interaction_terms = selected_eci.copy()
+
+    # Generate interaction terms for combinations of size 2 to n
+    for i in range(2, len(selected_eci) + 1):
+        # Generate all combinations of the current size
+        for combo in itertools.combinations(selected_eci, i):
+            # Join the variables with ':' to represent interaction
+            interaction_term = ':'.join(combo)
+            interaction_terms.append(interaction_term)
+
+    # Final covariate_order list
+    covariate_order = interaction_terms + selected_dataframes_list + ['gdp_pc']
+
     # Initialize base fixed effects terms
     fixed_effects_terms = []
     if 'time' in fixed_effects:
         fixed_effects_terms.append('C(Year)')
     if 'country' in fixed_effects:
         fixed_effects_terms.append('C(Country)')
-    
+
     fixed_effects_str = " + ".join(fixed_effects_terms)  # Combine fixed effects
 
     model_formulas = {}
@@ -340,15 +433,45 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
     model_formulas[model_counter] = f'growth ~ gdp_pc' + (f' + {fixed_effects_str}' if fixed_effects_str else "")
     model_counter += 1
 
-    # Model 2: Add selected ECI
-    model_formulas[model_counter] = f'growth ~ gdp_pc + {selected_eci}' + (f' + {fixed_effects_str}' if fixed_effects_str else "")
-    model_counter += 1
+    # All subsets of ECI with interactions
+    for r in range(1, len(selected_eci) + 1):
+        for combo in itertools.combinations(selected_eci, r):
+            eci_part = " * ".join(combo)  # e.g. "eci_trade * eci_tech"
+            formula = f"growth ~ gdp_pc + {eci_part}"
+            if fixed_effects_str:
+                formula += f" + {fixed_effects_str}"
+            
+            model_formulas[model_counter] = formula
+            model_counter += 1
+
+    # 3) Fit all models, pick the best by adjusted R^2
+    models = {}
+    best_model_num = None
+    best_adj_r2 = float('-inf')
+
+    for num, formula in model_formulas.items():
+        mod = smf.ols(formula, data=regression_df).fit(cov_type='HC1')
+        models[num] = mod
+        
+        pvalues = mod.pvalues
+
+        non_year_pvalues = pvalues[~pvalues.index.str.startswith(('C(Year)', 'C(Country)'))]
+
+        non_year_pvalues = non_year_pvalues.drop('Intercept', errors='ignore')
+        
+        # Check if all non-Year covariates are significant at 5% level
+        if (non_year_pvalues < 0.05).all() and mod.rsquared_adj > best_adj_r2:
+            best_adj_r2 = mod.rsquared_adj
+            best_model_num = num
+
+    best_model = models[best_model_num]
+    best_formula = model_formulas[best_model_num]
 
     # Add models for each covariate
     for cov in selected_dataframes_list:
         model_formulas[model_counter] = f'growth ~ gdp_pc + {cov}' + (f' + {fixed_effects_str}' if fixed_effects_str else "")
         model_counter += 1
-        model_formulas[model_counter] = f'growth ~ gdp_pc + {selected_eci} + {cov}' + (f' + {fixed_effects_str}' if fixed_effects_str else "")
+        model_formulas[model_counter] = f'{best_formula} + {cov}'
         model_counter += 1
 
     # Model with all covariates (no ECI)
@@ -358,8 +481,8 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
         model_counter += 1
 
         # Model with all covariates + ECI
-        model_formulas[model_counter] = f'growth ~ gdp_pc + {selected_eci} + {all_covariates}' + (f' + {fixed_effects_str}' if fixed_effects_str else "")
-    
+        model_formulas[model_counter] = f'{best_formula} + {all_covariates}'
+
     models = {}
     for model_num, formula in model_formulas.items():
         model = smf.ols(formula, data=regression_df).fit(cov_type='HC1')
@@ -400,7 +523,11 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
         'entropy_publications': 'Entropy (research)',
         'intensity_trade': 'Log of exports per capita',
         'intensity_patents': 'Log of patents per capita',
-        'intensity_publications': 'Log of publications per capita'       
+        'intensity_publications': 'Log of publications per capita',
+        'eci_trade:eci_tech': 'ECI (trade) x ECI (tech)',
+        'eci_trade:eci_research': 'ECI (trade) x ECI (research)',    
+        'eci_tech:eci_research': 'ECI (tech) x ECI (research)',
+        'eci_trade:eci_tech:eci_research': 'ECI (trade) x ECI (tech) x ECI (research)'    
     }
 
     stargazer.rename_covariates(rename_dict)
@@ -419,11 +546,19 @@ def run_regression(n_clicks, selected_eci, selected_dataframes_list, initial_yea
         f"<em>Dependent variable: {dep_var_label}</em>"
     )
 
+
+    # Build a note about lost data
+    lost_data_note = (
+        f"Data used: {after_len} of {original_len} countries "
+        f"({fraction_lost:.2%} of countries dropped due to missing data)."
+    )
+
     return html.Div([
         html.Iframe(
             srcDoc=html_output,
             style={'width': '100%', 'height': '600px', 'border': 'none'}
-        )
+        ),
+        html.P(lost_data_note)
     ])
 
 if __name__ == '__main__':
